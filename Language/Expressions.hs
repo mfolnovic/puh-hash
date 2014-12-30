@@ -1,3 +1,5 @@
+module Language.Expressions where
+
 -- Contains the data structures describing the structure of the language itself
 -- You are free to use a different structure, as long as it describes a similar
 -- enough language sufficiently well.

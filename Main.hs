@@ -1,10 +1,11 @@
 module Main (main) where
 
-import System.Environment
+import System.Environment (getArgs)
 import Hash
 
 main :: IO ()
 main = do
   args <- getArgs
-  if (null args) then runInteractive
-                 else runScript $ head args
+  case args of [] -> runInteractive
+               [path] -> runScript path
+               _ -> error "Hash [path]"
