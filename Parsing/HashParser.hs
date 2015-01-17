@@ -1,4 +1,4 @@
-module Parsing.HashParser (parseScript) where
+module Parsing.HashParser (parseScript, scriptParser, ifelseexpr) where
 
 import Control.Applicative (Applicative, many, (<$), (<*>), (<$>), (<|>), (*>), (<*))
 import Control.Monad (void)
@@ -8,8 +8,8 @@ import Language.Expressions
 
 import Text.Parsec (ParseError)
 import Text.Parsec.String (Parser)
-import Text.Parsec.Char (alphaNum, anyChar, letter, char, digit, oneOf, noneOf)
-import Text.Parsec.Combinator (choice, manyTill, many1, eof)
+import Text.Parsec.Char (alphaNum, anyChar, letter, char, digit, oneOf, noneOf, string)
+import Text.Parsec.Combinator (choice, manyTill, many1, eof, sepBy1)
 import Text.ParserCombinators.Parsec (try, parse)
 
 parseScript :: String -> [TLExpr]
@@ -19,7 +19,16 @@ parseScript str =
   where result = parse scriptParser "(unknown)" str
 
 scriptParser :: Parser [TLExpr]
-scriptParser = many $ empty *> (TLCmd <$> (try assign <|> command))
+scriptParser = many $ empty *> (try tlcnd <|> tlcmd)
+
+tlcmd :: Parser TLExpr
+tlcmd = TLCmd <$> assignOrCommand
+
+tlcnd :: Parser TLExpr
+tlcnd = TLCnd <$> (try ifelseexpr <|> ifexpr) <* empty
+
+commands :: Parser [Cmd]
+commands = many $ empty *> (try assign <|> command)
 
 lexeme :: Parser a -> Parser a
 lexeme p = p <* space
@@ -68,6 +77,44 @@ varParser = (char '$') *> (Var <$> identifier)
 expr :: Parser Expr
 expr = try varParser <|> stringParser
 
+comp :: (Expr -> Expr -> Comp) -> String -> Parser Comp
+comp t op = do
+  e1 <- lexeme expr
+  _ <- lexeme $ string op
+  e2 <- lexeme expr
+  return $ t e1 e2
+
+comparison :: Parser Comp
+comparison = (try $ comp CEQ "==") <|>
+             (try $ comp CNE "/=") <|>
+             (try $ comp CGE ">=") <|>
+             (try $ comp CGT ">")  <|>
+             (try $ comp CLE "<=") <|>
+             (try $ comp CLT "<")  <|>
+             (CLI <$> expr)
+
+notPredicate :: Parser Pred
+notPredicate = (lexeme $ char '!') *> (Not <$> predicate)
+
+singlePredicate :: Parser Pred
+singlePredicate = Pred <$> comparison
+
+parensPredicate :: Parser Pred
+parensPredicate = (lexeme $ char '(') *> (predicate) <* (lexeme $ char ')')
+
+orAndPredicate :: (Pred -> Pred -> Pred) -> String -> Parser Pred
+orAndPredicate t s = do
+  p1 <- lexeme simplePredicate
+  _ <- lexeme $ string s
+  p2 <- lexeme simplePredicate
+  return $ t p1 p2
+
+simplePredicate :: Parser Pred
+simplePredicate = try notPredicate <|> try parensPredicate <|> singlePredicate
+
+predicate :: Parser Pred
+predicate = (try $ orAndPredicate Or "-o") <|> (try $ orAndPredicate And "-a") <|> simplePredicate
+
 assign :: Parser Cmd
 assign = do
   name <- Str <$> identifier
@@ -82,3 +129,24 @@ command = do
   args <- many expr
   _ <- empty
   return $ Cmd name args Nothing Nothing False
+
+assignOrCommand :: Parser Cmd
+assignOrCommand = try assign <|> command
+
+ifexpr :: Parser Conditional
+ifexpr = do
+  _ <- string "if" <* whitespace
+  pred <- predicate
+  _ <- string "then" <* empty
+  cthen <- manyTill assignOrCommand (try $ string "fi")
+  return $ If pred cthen
+
+ifelseexpr :: Parser Conditional
+ifelseexpr = do
+  _ <- string "if" <* whitespace
+  pred <- predicate
+  _ <- string "then" <* empty
+  cthen <- manyTill assignOrCommand (try $ string "else")
+  _ <- empty
+  celse <- manyTill assignOrCommand (try $ string "fi")
+  return $ IfElse pred cthen celse

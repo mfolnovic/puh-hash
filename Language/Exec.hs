@@ -1,4 +1,4 @@
-module Language.Exec (Command, ScriptState, runHashProgram, interpolation) where
+module Language.Exec (Command, ScriptState, runHashProgram) where
 
 import Data.Char (isAlphaNum)
 import Data.List (elemIndex)
@@ -42,15 +42,18 @@ runHashProgram ct (Right state) (x:xs) = do
 
 -- Calculates the result of a top-level command execution
 runTopLevel :: CommandTable -> ScriptState -> TLExpr -> IO ScriptState
-runTopLevel ct state (TLCmd cmd@(Cmd _ _ _ _ _)) = runCommand ct state cmd
-runTopLevel ct state (TLCmd assign@(Assign _ _)) = runAssign state assign
-
+runTopLevel ct state (TLCmd cmd) = runAnyCommand ct state cmd
+runTopLevel ct state (TLCnd cnd) = runIf ct state cnd
 -- The rest of the module should consist of similar functions, calling each
 -- other so that each expression is parsed by a lower-level function and the
 -- result can be used in a higher-level function. The Command table and state
 -- are passed around as necessary to evaluate commands, assignments and
 -- variable substitution. A better way to pass around variables would be to
 -- use the State monad or even the StateT monad transformer to wrap IO into it.
+
+runAnyCommand :: CommandTable -> ScriptState -> Cmd -> IO ScriptState
+runAnyCommand ct state cmd@(Cmd _ _ _ _ _) = runCommand ct state cmd
+runAnyCommand ct state assign@(Assign _ _) = runAssign state assign
 
 runCommand :: CommandTable -> ScriptState -> Cmd -> IO ScriptState
 runCommand ct state (Cmd name args _ _ _) = do
@@ -60,10 +63,37 @@ runCommand ct state (Cmd name args _ _ _) = do
         args' = map (value vt) args
         vt = vartable state
 
+runCommands :: CommandTable -> ScriptState -> [Cmd] -> IO ScriptState
+runCommands ct state [] = return state
+runCommands ct state (x:xs) = do
+  state' <- runAnyCommand ct state x
+  runCommands ct state' xs
+
 runAssign :: ScriptState -> Cmd -> IO ScriptState
 runAssign st@(ScriptState _ _ vt) (Assign (Str var) val) = return $ st { vartable = vt' }
   where vt' = M.insert var val' vt
         val' = value vt val
+
+runIf :: CommandTable -> ScriptState -> Conditional -> IO ScriptState
+runIf ct state (If pred cthen) =
+  if (evaluatePred vt pred) then runCommands ct state cthen else return state
+  where vt = vartable state
+runIf ct state (IfElse pred cthen celse) =
+  if (evaluatePred vt pred) then runCommands ct state cthen
+                           else runCommands ct state celse
+  where vt = vartable state
+
+evaluateComp :: VarTable -> Comp -> Bool
+evaluateComp vt (CEQ a b) = (value vt a) == (value vt b)
+evaluateComp vt (CNE a b) = (value vt a) /= (value vt b)
+evaluateComp vt (CGE a b) = (value vt a) > (value vt b)
+evaluateComp vt (CGT a b) = (value vt a) >= (value vt b)
+evaluateComp vt (CLE a b) = (value vt a) <= (value vt b)
+evaluateComp vt (CLT a b) = (value vt a) < (value vt b)
+evaluateComp vt (CLI a) = not $ null $ value vt a
+
+evaluatePred :: VarTable -> Pred -> Bool
+evaluatePred vt (Pred comp) = evaluateComp vt comp
 
 interpolation :: VarTable -> String -> String
 interpolation vt str = case next of
