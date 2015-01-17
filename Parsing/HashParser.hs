@@ -19,20 +19,28 @@ parseScript str =
   where result = parse scriptParser "(unknown)" str
 
 scriptParser :: Parser [TLExpr]
-scriptParser = many $ TLCmd <$> command
+scriptParser = do
+  _ <- empty
+  many $ TLCmd <$> command
 
 lexeme :: Parser a -> Parser a
-lexeme p = p <* whitespace
+lexeme p = p <* space
 
-lexeme' :: Parser a -> Parser a
-lexeme' p = p <* space
+empty :: Parser ()
+empty = void $ many $ (try comment) <|> whitespace
 
 infixr 5 <:>
 (<:>) :: Applicative f => f a -> f [a] -> f [a] 
 a <:> b = (:) <$> a <*> b
 
 whitespace :: Parser ()
-whitespace = void $ many $ oneOf " \n\t"
+whitespace = void $ many1 $ oneOf " \n\t"
+
+comment :: Parser ()
+comment = do
+  _ <- char '#'
+  _ <- void $ many $ noneOf "\n"
+  return ()
 
 space :: Parser ()
 space = void $ many $ char ' '
@@ -47,7 +55,7 @@ stringParser = try nonQuotedString <|> quotedString
 
 nonQuotedString :: Parser Expr
 nonQuotedString = Str <$> parsed
-  where parsed = lexeme' $ many1 $ noneOf " \"\n\t"
+  where parsed = lexeme $ many1 $ noneOf " \"\n\t"
 
 quotedString :: Parser Expr
 quotedString = do
@@ -66,5 +74,5 @@ command :: Parser Cmd
 command = do
   name <- expr
   args <- many expr
-  _ <- whitespace
+  _ <- empty
   return $ Cmd name args Nothing Nothing False

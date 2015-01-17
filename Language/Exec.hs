@@ -28,6 +28,7 @@ data ScriptState = ScriptState { output :: String
 -- command’s execution.
 runHashProgram :: CommandTable -> Either FilePath ScriptState -> [TLExpr]
                     -> IO ScriptState
+runHashProgram ct (Left path) [] = return $ ScriptState "" path M.empty
 runHashProgram _ (Right state) [] = return state
 runHashProgram ct (Left path) (x:xs) = do
   nextState <- runTopLevel ct initial x
