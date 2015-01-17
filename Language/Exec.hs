@@ -1,4 +1,4 @@
-module Language.Exec (Command, ScriptState, runHashProgram) where
+module Language.Exec (Command, ScriptState(..), runHashProgram) where
 
 import Data.Char (isAlphaNum)
 import Data.List (elemIndex)
@@ -6,6 +6,8 @@ import qualified Data.Map as M
 import Data.Maybe (fromJust, fromMaybe)
 
 import Language.Expressions
+
+import System.IO
 
 -- A model of a command which is waiting for arguments and a state to run
 type Command = [String] -> ScriptState -> IO ScriptState
@@ -56,12 +58,22 @@ runAnyCommand ct state cmd@(Cmd _ _ _ _ _) = runCommand ct state cmd
 runAnyCommand ct state assign@(Assign _ _) = runAssign state assign
 
 runCommand :: CommandTable -> ScriptState -> Cmd -> IO ScriptState
-runCommand ct state (Cmd name args _ _ _) = do
+runCommand ct state (Cmd name args inDir outDir append) = do
   let command = fromJust $ M.lookup name' ct
-  command args' state
+  newState <- command args' state
+  handleOutput vt newState outDir append
+  return newState
   where name' = value vt name
-        args' = map (value vt) args
+        args' = map (value vt) (args ++ (case inDir of
+                                          Just inDir -> [inDir]
+                                          Nothing    -> []))
         vt = vartable state
+
+handleOutput :: VarTable -> ScriptState -> Maybe Expr -> Bool -> IO ()
+handleOutput _ (ScriptState output _ _) Nothing _ = putStr output
+handleOutput vt (ScriptState output _ _) (Just expr) append = do
+  let fileName = value vt expr
+  if (append) then appendFile fileName output else writeFile fileName output
 
 runCommands :: CommandTable -> ScriptState -> [Cmd] -> IO ScriptState
 runCommands ct state [] = return state

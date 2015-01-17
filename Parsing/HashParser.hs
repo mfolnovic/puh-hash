@@ -9,7 +9,7 @@ import Language.Expressions
 import Text.Parsec (ParseError)
 import Text.Parsec.String (Parser)
 import Text.Parsec.Char (alphaNum, anyChar, letter, char, digit, oneOf, noneOf, string)
-import Text.Parsec.Combinator (choice, manyTill, many1, eof, sepBy1)
+import Text.Parsec.Combinator (choice, manyTill, many1, eof, optionMaybe)
 import Text.ParserCombinators.Parsec (try, parse)
 
 parseScript :: String -> [TLExpr]
@@ -58,17 +58,18 @@ identifier = lexeme $ firstChar <:> many nonFirstChar
         nonFirstChar = digit <|> firstChar
 
 stringParser :: Parser Expr
-stringParser = try nonQuotedString <|> quotedString
+--stringParser = try nonQuotedString <|> quotedString
+stringParser = try quotedString <|> nonQuotedString
 
 nonQuotedString :: Parser Expr
 nonQuotedString = Str <$> parsed
-  where parsed = lexeme $ many1 $ noneOf " #\"\n\t"
+  where parsed = lexeme $ many1 $ noneOf " <>#\"\n\t"
 
 quotedString :: Parser Expr
 quotedString = do
-  char '"'
+  _ <- char '"'
   result <- many $ noneOf "\""
-  char '"'
+  _ <- char '"'
   return $ Str result
 
 varParser :: Parser Expr
@@ -127,8 +128,27 @@ command :: Parser Cmd
 command = do
   name <- expr
   args <- many expr
+  _ <- whitespace
+  inDir <- optionMaybe inDirP
+  outDirAppend <- optionMaybe outDirP
+  let (outDir, append) = case outDirAppend of
+                           Just (outDir, append) -> (Just outDir, append)
+                           Nothing              -> (Nothing, False)
   _ <- empty
-  return $ Cmd name args Nothing Nothing False
+  return $ Cmd name args inDir outDir append
+
+outDirP :: Parser (Expr, Bool)
+outDirP = do
+  t <- lexeme $ (try $ string ">>") <|> string ">"
+  e <- lexeme expr
+  let append = t == ">>"
+  return (e, append)
+
+inDirP :: Parser Expr
+inDirP = do
+  _ <- lexeme $ string "<"
+  e <- lexeme expr
+  return e
 
 assignOrCommand :: Parser Cmd
 assignOrCommand = try assign <|> command
