@@ -59,7 +59,9 @@ runCommand ct state (Cmd name args _ _ _) = do
         vt = vartable state
 
 runAssign :: ScriptState -> Cmd -> IO ScriptState
-runAssign st (Assign var val) = return st
+runAssign st@(ScriptState _ _ vt) (Assign (Str var) val) = return $ st { vartable = vt' }
+  where vt' = M.insert var val' vt
+        val' = value vt val
 
 value :: VarTable -> Expr -> String
 value _ (Str x) = x

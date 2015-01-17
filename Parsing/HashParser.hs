@@ -66,7 +66,7 @@ varParser :: Parser Expr
 varParser = (char '$') *> (Var <$> identifier)
 
 expr :: Parser Expr
-expr = try stringParser <|> varParser
+expr = try varParser <|> stringParser
 
 assign :: Parser Cmd
 assign = do
