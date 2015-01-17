@@ -1,5 +1,7 @@
-module Language.Exec (Command, ScriptState, runHashProgram) where
+module Language.Exec (Command, ScriptState, runHashProgram, interpolation) where
 
+import Data.Char (isAlphaNum)
+import Data.List (elemIndex)
 import qualified Data.Map as M
 import Data.Maybe (fromJust, fromMaybe)
 
@@ -63,6 +65,14 @@ runAssign st@(ScriptState _ _ vt) (Assign (Str var) val) = return $ st { vartabl
   where vt' = M.insert var val' vt
         val' = value vt val
 
+interpolation :: VarTable -> String -> String
+interpolation vt str = case next of
+    Just (i, name) -> interpolation vt $ (take i str) ++ (val name) ++ (drop (1 + i + length name) str)
+    Nothing -> str
+  where next = fmap withVar $ elemIndex '$' str
+        withVar i = (i, takeWhile (\x ->  isAlphaNum x || x == '_') $ drop (i + 1) str)
+        val x = fromMaybe "" $ M.lookup x vt
+
 value :: VarTable -> Expr -> String
-value _ (Str x) = x
+value vt (Str x) = interpolation vt x
 value vt (Var x) = fromMaybe "" $ M.lookup x vt
