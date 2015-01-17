@@ -7,6 +7,7 @@ import Data.Maybe (fromJust, fromMaybe)
 
 import Language.Expressions
 
+import System.Directory
 import System.IO
 
 -- A model of a command which is waiting for arguments and a state to run
@@ -35,9 +36,10 @@ runHashProgram :: CommandTable -> Either FilePath ScriptState -> [TLExpr]
 runHashProgram ct (Left path) [] = return $ ScriptState "" path M.empty
 runHashProgram _ (Right state) [] = return state
 runHashProgram ct (Left path) (x:xs) = do
+  currentDir <- getCurrentDirectory
+  let initial = ScriptState "" currentDir M.empty
   nextState <- runTopLevel ct initial x
   runHashProgram ct (Right nextState) xs
-  where initial = ScriptState "" path M.empty
 runHashProgram ct (Right state) (x:xs) = do
   nextState <- runTopLevel ct state x
   runHashProgram ct (Right nextState) xs
