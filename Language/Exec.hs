@@ -40,12 +40,8 @@ runHashProgram ct (Right state) (x:xs) = do
 
 -- Calculates the result of a top-level command execution
 runTopLevel :: CommandTable -> ScriptState -> TLExpr -> IO ScriptState
-runTopLevel ct state (TLCmd (Cmd name args _ _ _)) = do
-  let command = fromJust $ M.lookup name' ct
-  command args' state
-  where name' = value vt name
-        args' = map (value vt) args
-        vt = vartable state
+runTopLevel ct state (TLCmd cmd@(Cmd _ _ _ _ _)) = runCommand ct state cmd
+runTopLevel ct state (TLCmd assign@(Assign _ _)) = runAssign state assign
 
 -- The rest of the module should consist of similar functions, calling each
 -- other so that each expression is parsed by a lower-level function and the
@@ -53,6 +49,17 @@ runTopLevel ct state (TLCmd (Cmd name args _ _ _)) = do
 -- are passed around as necessary to evaluate commands, assignments and
 -- variable substitution. A better way to pass around variables would be to
 -- use the State monad or even the StateT monad transformer to wrap IO into it.
+
+runCommand :: CommandTable -> ScriptState -> Cmd -> IO ScriptState
+runCommand ct state (Cmd name args _ _ _) = do
+  let command = fromJust $ M.lookup name' ct
+  command args' state
+  where name' = value vt name
+        args' = map (value vt) args
+        vt = vartable state
+
+runAssign :: ScriptState -> Cmd -> IO ScriptState
+runAssign st (Assign var val) = return st
 
 value :: VarTable -> Expr -> String
 value _ (Str x) = x
