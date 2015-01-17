@@ -128,7 +128,7 @@ command :: Parser Cmd
 command = do
   name <- expr
   args <- many expr
-  _ <- whitespace
+  _ <- optionMaybe whitespace
   inDir <- optionMaybe inDirP
   outDirAppend <- optionMaybe outDirP
   let (outDir, append) = case outDirAppend of
