@@ -28,5 +28,5 @@ The task of this project is to implement **Hash**, a simple shell programmed in 
     - [x] Looping (*8 pts*)
     - [ ] Forking (*8 pts*)
     - [ ] `hexdump` (*3 pts*)
-    - [ ] .hashrc (*2 pts*)
+    - [x] .hashrc (*2 pts*)
     - [ ] `ping` (*3 pts*)
