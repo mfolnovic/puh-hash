@@ -5,10 +5,13 @@ import Control.Exception
 import Control.Monad
 
 import Data.Bits
+import qualified Data.ByteString as BS
 import Data.Char
 import Data.List
 import qualified Data.Map as M
 import Language.Exec (Command, ScriptState(..))
+
+import Numeric (showHex)
 
 import System.Console.GetOpt
 import System.Directory
@@ -16,6 +19,8 @@ import System.Posix.Files
 import System.IO
 import System.IO.Error
 import System.FilePath
+
+import Text.Printf (printf)
 
 -- A map of (command name, command pairs), used to abstract command
 -- execution and make adding new commands relatively easy
@@ -34,6 +39,7 @@ commands = M.fromList [ ("echo", echo)
                       , ("rmdir", rmdir)
                       , ("grep", grep)
                       , ("chmod", chmod)
+                      , ("hexdump", hexdump)
                       ]
 
 echo :: Command
@@ -231,4 +237,19 @@ chmodHelper flag path = do
         otherModes = filterModes [otherReadMode, otherWriteMode, otherExecuteMode]
         allModes = concat $ map fst $ filter (\x -> snd x == True) $ zip [userModes, groupModes, otherModes] availableRefs 
         filterModes xs = map fst $ filter (\x -> snd x == True) $ zip xs availableModes
-        
+
+hexdump :: Command
+hexdump [path] state@(ScriptState _ wd _) = do
+  contents <- BS.readFile path
+--  let hex = concat $ map (\x -> showHex x "") $ BS.unpack contents
+  let output = final 0 (BS.length contents) $ grouping $ BS.unpack contents
+  return state { output = unlines output }
+  where grouping [] = []
+        grouping [x] = [pad 4 $ "0" ++ (showHex x "")]
+        grouping (x:y:xs) = pad 4 ((showHex y "") ++ (showHex x "")) : grouping xs
+        final _ len [] = [index len ++ ""]
+        final i len xs = (index i ++ " " ++ intercalate " " ys) : final (i + 16) len zs
+          where (ys, zs) = splitAt 8 xs
+        index x = pad 7 $ showHex x ""
+        pad n x = printf ("%0" ++ show n ++ "s") x
+hexdump _ state = return state { output = unlines [ "hexdump: only one file" ] }
