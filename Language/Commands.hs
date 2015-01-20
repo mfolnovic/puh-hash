@@ -46,14 +46,23 @@ echo :: Command
 echo x state = return $ state { output = unlines [intercalate " " x] }
 
 cat :: Command
-cat xs state = do
-  files <- sequence $ map readFile xs
+cat xs state@(ScriptState _ wd _) = do
+  files <- sequence $ map (safeRead . combine wd) xs
   return state { output = unlines files }
+
+safeRead :: FilePath -> IO String
+safeRead path = do
+  fileExists <- doesFileExist path
+  directoryExists <- doesDirectoryExist path
+  case (fileExists, directoryExists) of
+    (True, _) -> readFile path
+    (False, True) -> return $ "cat: " ++ path ++ " is a directory."
+    (False, False) -> return $ "cat: " ++ path ++ " does not exist."
 
 ls :: Command
 ls xs state@(ScriptState _ wd _) = do
   let paths = if null xs then [wd] else xs
-  files <- sequence $ map getDirectoryContents paths
+  files <- sequence $ map (getList . combine wd) paths
   let lists = map (unlines . map takeFileName) files
   return state { output = unlines lists }
 
@@ -64,8 +73,13 @@ pwd _ state = do
 cd :: Command
 cd xs state@(ScriptState _ wd _) = do
   homeDir <- getHomeDirectory
-  path <- if null xs then getHomeDirectory else return $ combine wd $ head xs
+  path <- if null xs then getHomeDirectory
+                     else return $ next $ reverse $ map dropTrailingPathSeparator $ splitPath $ head xs
   return state { output = "", wd = path }
+  where next [] = wd
+        next (".":xs) = next xs
+        next ("..":xs) = takeDirectory $ next xs
+        next (dir:xs) = combine (next xs) dir
 
 create :: Command
 create xs state@(ScriptState _ wd _) = do
@@ -99,7 +113,7 @@ getList :: FilePath -> IO [FilePath]
 getList path = do
   directoryExists <- doesDirectoryExist path
   contents <- if (directoryExists) then getDirectoryContents path else return []
-  return $ filter (\x -> x /= "." && x /= "..") contents
+  return $ sort $ filter (\x -> x /= "." && x /= "..") contents
 
 cp :: Command
 cp xs state@(ScriptState _ wd _)
