@@ -23,7 +23,7 @@ The task of this project is to implement **Hash**, a simple shell programmed in 
 - [ ] Advanced functionality (*20% for 10 pts*)
     - [x] `grep` (*4 pts*)
     - [ ] Piping (*5 pts*)
-    - [ ] `chmod` (*3 pts*)
+    - [x] `chmod` (*3 pts*)
     - [ ] Glob expansion (*5 pts*)
     - [x] Looping (*8 pts*)
     - [ ] Forking (*8 pts*)

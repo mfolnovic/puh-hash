@@ -4,6 +4,7 @@ import Control.Applicative
 import Control.Exception
 import Control.Monad
 
+import Data.Bits
 import Data.Char
 import Data.List
 import qualified Data.Map as M
@@ -11,6 +12,7 @@ import Language.Exec (Command, ScriptState(..))
 
 import System.Console.GetOpt
 import System.Directory
+import System.Posix.Files
 import System.IO
 import System.IO.Error
 import System.FilePath
@@ -18,21 +20,21 @@ import System.FilePath
 -- A map of (command name, command pairs), used to abstract command
 -- execution and make adding new commands relatively easy
 commands :: M.Map String Command
-commands = M.fromList [
-             ("echo", echo),
-             ("cat", cat),
-             ("ls", ls),
-             ("pwd", pwd),
-             ("cd", cd),
-             ("create", create),
-             ("mv", mv),
-             ("cp", cp),
-             ("rm", rm),
-             ("cpdir", cpdir),
-             ("mkdir", mkdir),
-             ("rmdir", rmdir),
-             ("grep", grep)
-           ]
+commands = M.fromList [ ("echo", echo)
+                      , ("cat", cat)
+                      , ("ls", ls)
+                      , ("pwd", pwd)
+                      , ("cd", cd)
+                      , ("create", create)
+                      , ("mv", mv)
+                      , ("cp", cp)
+                      , ("rm", rm)
+                      , ("cpdir", cpdir)
+                      , ("mkdir", mkdir)
+                      , ("rmdir", rmdir)
+                      , ("grep", grep)
+                      , ("chmod", chmod)
+                      ]
 
 echo :: Command
 echo x state = return $ state { output = unlines [intercalate " " x] }
@@ -159,7 +161,6 @@ grepHelper :: ScriptState -> [GrepFlag] -> [String] -> IO ScriptState
 grepHelper state flags [pattern, file] = do
   output <- grepSingle state flags pattern file
   return state { output = output }
-
 grepHelper state flags (pattern:xs) = do
   results <- forM xs $ grepSingle state flags pattern
   let output = unlines $ concat [[file ++ ":", result] | (file, result) <- zip xs results]
@@ -187,3 +188,47 @@ grepMap flags pattern = count . onlyMatching . lineNumber
         count results = if Count `elem` flags then [show $ length results]
                                               else results
 
+data ChmodFlag = ChmodFlag { references :: String
+                           , operator   :: Char
+                           , modes      :: String } deriving Show
+
+chmod :: Command
+chmod xs state@(ScriptState _ wd _)
+  | length xs <= 1         = return state { output = unlines [ "chmod: missing operands" ] }
+  | (operator flag) == 'u' = return state { output = unlines [ "chmod: invalid flags" ] }
+  | (null $ modes flag)    = return state { output = unlines [ "chmod: invalid flags" ] }
+  | otherwise              = ioHelper (chmodHelper flag) "chmod" (tail xs) state
+  where flag = parseFlag $ head xs
+
+parseFlag :: String -> ChmodFlag
+parseFlag flags = ChmodFlag references' operator modes
+  where references = takeWhile (\x -> x `notElem` ['+', '-', '=']) flags
+        references' = if null references then "a" else references
+        afterRef = drop (length references) flags
+        operator = if null afterRef then 'u' else head afterRef
+        modes = if null afterRef then "" else tail afterRef
+
+chmodHelper :: ChmodFlag -> FilePath -> IO ()
+chmodHelper flag path = do
+  current <- fileMode <$> getFileStatus path
+  let mask = foldl (.|.) 0 allModes
+  let next = case (operator flag) of
+               '+' -> current .|. mask
+               '-' -> current .&. (complement mask)
+               '=' -> mask
+  setFileMode path next
+  where read = 'r' `elem` modes flag
+        write = 'w' `elem` modes flag
+        execute = 'x' `elem` modes flag
+        user = all || 'u' `elem` references flag
+        group = all || 'g' `elem` references flag
+        others = all || 'o' `elem` references flag
+        all = 'a' `elem` references flag
+        availableModes = [read, write, execute]
+        availableRefs = [user, group, others]
+        userModes =  filterModes [ownerReadMode, ownerWriteMode, ownerExecuteMode]
+        groupModes = filterModes [groupReadMode, groupWriteMode, groupExecuteMode]
+        otherModes = filterModes [otherReadMode, otherWriteMode, otherExecuteMode]
+        allModes = concat $ map fst $ filter (\x -> snd x == True) $ zip [userModes, groupModes, otherModes] availableRefs 
+        filterModes xs = map fst $ filter (\x -> snd x == True) $ zip xs availableModes
+        
