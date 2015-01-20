@@ -19,13 +19,16 @@ parseScript str =
   where result = parse scriptParser "(unknown)" str
 
 scriptParser :: Parser [TLExpr]
-scriptParser = many $ empty *> (try tlcnd <|> tlcmd)
+scriptParser = many $ empty *> (try tlcnd <|> try tlloop <|> try tlcmd)
 
 tlcmd :: Parser TLExpr
 tlcmd = TLCmd <$> assignOrCommand
 
 tlcnd :: Parser TLExpr
 tlcnd = TLCnd <$> (try ifelseexpr <|> ifexpr) <* empty
+
+tlloop :: Parser TLExpr
+tlloop = TLLoop <$> while
 
 commands :: Parser [Cmd]
 commands = many $ empty *> (try assign <|> command)
@@ -170,3 +173,11 @@ ifelseexpr = do
   _ <- empty
   celse <- manyTill assignOrCommand (try $ string "fi")
   return $ IfElse pred cthen celse
+
+while :: Parser Loop
+while = do
+  _ <- string "while" <* whitespace
+  pred <- predicate
+  _ <- string "do" <* empty
+  commands <- manyTill assignOrCommand (try $ string "done")
+  return $ While pred commands

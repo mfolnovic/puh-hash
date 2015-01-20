@@ -48,6 +48,8 @@ runHashProgram ct (Right state) (x:xs) = do
 runTopLevel :: CommandTable -> ScriptState -> TLExpr -> IO ScriptState
 runTopLevel ct state (TLCmd cmd) = runAnyCommand ct state cmd
 runTopLevel ct state (TLCnd cnd) = runIf ct state cnd
+runTopLevel ct state (TLLoop loop) = runLoop ct state loop
+
 -- The rest of the module should consist of similar functions, calling each
 -- other so that each expression is parsed by a lower-level function and the
 -- result can be used in a higher-level function. The Command table and state
@@ -95,6 +97,13 @@ runIf ct state (If pred cthen) =
 runIf ct state (IfElse pred cthen celse) =
   if (evaluatePred vt pred) then runCommands ct state cthen
                            else runCommands ct state celse
+  where vt = vartable state
+
+runLoop :: CommandTable -> ScriptState -> Loop -> IO ScriptState
+runLoop ct state loop@(While pred commands) = do
+  if (evaluatePred vt pred) then do state' <- runCommands ct state commands
+                                    runLoop ct state' loop
+                            else return state
   where vt = vartable state
 
 evaluateComp :: VarTable -> Comp -> Bool

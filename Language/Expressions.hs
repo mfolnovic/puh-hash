@@ -51,8 +51,14 @@ data Conditional = If { cond :: Pred -- Predicate to satisfy
                           }
                  deriving Show
 
+data Loop = While { loopCond :: Pred
+                  , commands :: [Cmd]
+                  }
+            deriving Show
+
 -- A top-level expression, wrapping either a conditional expression or a
 -- command
 data TLExpr = TLCmd Cmd
             | TLCnd Conditional
+            | TLLoop Loop
             deriving Show
