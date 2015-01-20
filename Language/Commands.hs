@@ -75,7 +75,12 @@ cd xs state@(ScriptState _ wd _) = do
   homeDir <- getHomeDirectory
   path <- if null xs then getHomeDirectory
                      else return $ next $ reverse $ map dropTrailingPathSeparator $ splitPath $ head xs
-  return state { output = "", wd = path }
+  fileExists <- doesFileExist path
+  directoryExists <- doesDirectoryExist path
+  case (fileExists, directoryExists) of
+    (_, True) -> return state { output = "", wd = path }
+    (True, False) -> return state { output = unlines ["cd: " ++ (head xs) ++ " is a file."] }
+    (False, False) -> return state { output = unlines ["cd: " ++ (head xs) ++ " does not exist."] }
   where next [] = wd
         next (".":xs) = next xs
         next ("..":xs) = takeDirectory $ next xs
