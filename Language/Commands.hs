@@ -1,12 +1,15 @@
 module Language.Commands (commands) where
 
+import Control.Applicative
 import Control.Exception
 import Control.Monad
 
+import Data.Char
 import Data.List
 import qualified Data.Map as M
 import Language.Exec (Command, ScriptState(..))
 
+import System.Console.GetOpt
 import System.Directory
 import System.IO
 import System.IO.Error
@@ -27,7 +30,8 @@ commands = M.fromList [
              ("rm", rm),
              ("cpdir", cpdir),
              ("mkdir", mkdir),
-             ("rmdir", rmdir)
+             ("rmdir", rmdir),
+             ("grep", grep)
            ]
 
 echo :: Command
@@ -133,4 +137,53 @@ ioActionHelper f name (x:xs) state@(ScriptState _ wd _) = do
     Left e -> return state { output = unlines [ name ++ ": " ++ ioeGetErrorString e ] }
     Right val -> do state' <- ioActionHelper f name xs state
                     return state' { output = "" }
+
+data GrepFlag = Invert | IgnoreCase | OnlyMatching | LineNumber | Count deriving (Eq)
+
+grepOptions :: [OptDescr GrepFlag]
+grepOptions = [ Option ['v'] ["invert-match"]  (NoArg Invert)       "Invert the sense of matching, to select non-matching lines."
+              , Option ['i'] ["ignore-case"]   (NoArg IgnoreCase)   "Ignore case distinctions in both the pattern and the input file."
+              , Option ['o'] ["only-matching"] (NoArg OnlyMatching) "Print only the matched (non-empty) parts of a matching line."
+              , Option ['n'] ["line-number"]   (NoArg LineNumber)   "Prefix each line of output with the line number."
+              , Option ['c'] ["count"]         (NoArg Count)        "Print only a count of matching line for each input file."
+              ]
+
+grep :: Command
+grep xs state = case getOpt Permute grepOptions xs of
+  (flags, args, []) -> if (length args < 2) then return state { output = header }
+                                            else grepHelper state flags args
+  (_, _, errors)    -> return state { output = concat errors ++ header }
+  where header = usageInfo "Usage: grep [OPTION...] pattern files..." grepOptions
+
+grepHelper :: ScriptState -> [GrepFlag] -> [String] -> IO ScriptState
+grepHelper state flags [pattern, file] = do
+  output <- grepSingle state flags pattern file
+  return state { output = output }
+
+grepHelper state flags (pattern:xs) = do
+  results <- forM xs $ grepSingle state flags pattern
+  let output = unlines $ concat [[file ++ ":", result] | (file, result) <- zip xs results]
+  return state { output = output }
+
+grepSingle :: ScriptState -> [GrepFlag] -> String -> String -> IO String
+grepSingle state flags pattern file = do
+  h <- openFile file ReadMode
+  xs <- zip [1..] <$> lines <$> hGetContents h
+  return $ unlines $ grepMap flags pattern $ filter (grepFilter flags pattern) xs
+
+grepFilter :: [GrepFlag] -> String -> (Int, String) -> Bool
+grepFilter flags pattern = invert . ignoreCase . snd
+  where ignoreCase str = isInfixOf (lowerStr pattern) (lowerStr str)
+        invert x = if Invert `elem` flags then not x else x
+        lowerStr str = if IgnoreCase `elem` flags then map toLower str
+                                                  else str
+
+grepMap :: [GrepFlag] -> String -> [(Int, String)] -> [String]
+grepMap flags pattern = count . onlyMatching . lineNumber
+  where lineNumber results = if LineNumber `elem` flags then [show i ++ ": " ++ x | (i, x) <- results]
+                                                        else map snd results
+        onlyMatching results = if OnlyMatching `elem` flags then replicate (length results) pattern
+                                                            else results
+        count results = if Count `elem` flags then [show $ length results]
+                                              else results
 
