@@ -3,7 +3,9 @@ module Language.Exec (Command, ScriptState(..), runHashProgram) where
 import Data.Char (isAlphaNum)
 import Data.List (elemIndex)
 import qualified Data.Map as M
-import Data.Maybe (fromJust, fromMaybe)
+import Data.Maybe (fromJust, fromMaybe, isJust)
+
+import GHC.IO.Handle (hDuplicate)
 
 import Language.Expressions
 
@@ -11,7 +13,7 @@ import System.Directory
 import System.IO
 
 -- A model of a command which is waiting for arguments and a state to run
-type Command = [String] -> ScriptState -> IO ScriptState
+type Command = [String] -> Handle -> ScriptState -> IO ScriptState
 
 -- A table of variables, in fact a map of (Name, Value) pairs.
 type VarTable = M.Map String String
@@ -64,13 +66,15 @@ runAnyCommand ct state assign@(Assign _ _) = runAssign state assign
 runCommand :: CommandTable -> ScriptState -> Cmd -> IO ScriptState
 runCommand ct state (Cmd name args inDir outDir append) = do
   let command = fromJust $ M.lookup name' ct
-  newState <- command args' state
+  h <- case inDir of
+         Just inDir -> openFile (value vt inDir) ReadMode
+         Nothing    -> return stdin
+  newState <- command args' h state
   handleOutput vt newState outDir append
-  return newState
+  if (isJust inDir) then hClose h >> return newState
+                    else return newState
   where name' = value vt name
-        args' = map (value vt) (args ++ (case inDir of
-                                          Just inDir -> [inDir]
-                                          Nothing    -> []))
+        args' = map (value vt) args
         vt = vartable state
 
 handleOutput :: VarTable -> ScriptState -> Maybe Expr -> Bool -> IO ()

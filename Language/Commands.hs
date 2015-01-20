@@ -6,6 +6,7 @@ import Control.Monad
 
 import Data.Bits
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BSC
 import Data.Char
 import Data.List
 import qualified Data.Map as M
@@ -43,10 +44,13 @@ commands = M.fromList [ ("echo", echo)
                       ]
 
 echo :: Command
-echo x state = return $ state { output = unlines [intercalate " " x] }
+echo x _ state = return $ state { output = unlines [intercalate " " x] }
 
 cat :: Command
-cat xs state@(ScriptState _ wd _) = do
+cat [] h state = do
+  content <- readHandle h
+  return state { output = content }
+cat xs _ state@(ScriptState _ wd _) = do
   files <- sequence $ map (safeRead . combine wd) xs
   return state { output = unlines files }
 
@@ -60,18 +64,18 @@ safeRead path = do
     (False, False) -> return $ "cat: " ++ path ++ " does not exist."
 
 ls :: Command
-ls xs state@(ScriptState _ wd _) = do
+ls xs _ state@(ScriptState _ wd _) = do
   let paths = if null xs then [wd] else xs
   files <- sequence $ map (getList . combine wd) paths
   let lists = map (unlines . map takeFileName) files
   return state { output = unlines lists }
 
 pwd :: Command
-pwd _ state = do
+pwd _ _ state = do
   return state { output = unlines [wd state] }
 
 cd :: Command
-cd xs state@(ScriptState _ wd _) = do
+cd xs _ state@(ScriptState _ wd _) = do
   homeDir <- getHomeDirectory
   path <- if null xs then getHomeDirectory
                      else return $ next $ reverse $ map dropTrailingPathSeparator $ splitPath $ head xs
@@ -87,15 +91,15 @@ cd xs state@(ScriptState _ wd _) = do
         next (dir:xs) = combine (next xs) dir
 
 create :: Command
-create xs state@(ScriptState _ wd _) = do
+create xs _ state@(ScriptState _ wd _) = do
   let paths = map (combine wd) xs
   handles <- sequence $ map (\x -> openFile x AppendMode) paths
   return state { output = "" }
 
 mv :: Command
-mv xs state@(ScriptState _ wd _)
+mv xs h state@(ScriptState _ wd _)
   | length xs <= 1 = return state { output = unlines [ "mv: missing operands" ] }
-  | otherwise      = ioHelper (mvHelper $ combine wd $ last xs) "mv" (init xs) state
+  | otherwise      = ioHelper (mvHelper $ combine wd $ last xs) "mv" (init xs) h state
 
 mvHelper :: FilePath -> FilePath -> IO ()
 mvHelper dest source = do
@@ -121,25 +125,24 @@ getList path = do
   return $ sort $ filter (\x -> x /= "." && x /= "..") contents
 
 cp :: Command
-cp xs state@(ScriptState _ wd _)
+cp xs h state@(ScriptState _ wd _)
   | length xs <= 1 = return state { output = unlines [ "cp: missing operands" ] }
-  | otherwise      = ioHelper (cpHelper $ combine wd $ last xs) "cp" (init xs) state
+  | otherwise      = ioHelper (cpHelper $ combine wd $ last xs) "cp" (init xs) h state
 
 cpHelper :: FilePath -> FilePath -> IO ()
 cpHelper dest source = do
   directoryExists <- doesDirectoryExist dest
   let dest' = if (directoryExists) then combine dest $ takeFileName source
                                    else dest
-  putStrLn $ unlines [source, " + ", dest']
   copyFile source dest'
 
 rm :: Command
 rm = ioHelper removeFile "rm"
 
 cpdir :: Command
-cpdir xs state@(ScriptState _ wd _)
+cpdir xs h state@(ScriptState _ wd _)
   | length xs <= 1 = return state { output = unlines [ "cpdir: missing operands" ] }
-  | otherwise      = ioHelper (cpdirHelper $ combine wd $ last xs) "cpdir" (init xs) state
+  | otherwise      = ioHelper (cpdirHelper $ combine wd $ last xs) "cpdir" (init xs) h state
 
 cpdirHelper :: FilePath -> FilePath -> IO ()
 cpdirHelper dest source = do
@@ -152,19 +155,6 @@ mkdir = ioHelper createDirectory "mkdir"
 rmdir :: Command
 rmdir = ioHelper removeDirectory "rmdir"
 
-ioHelper :: (FilePath -> IO ()) -> String -> Command
-ioHelper _ name [] state = return state { output = unlines[name ++ ": missing operand"] }
-ioHelper f name xs state = ioActionHelper f name xs state
-
-ioActionHelper :: (FilePath -> IO ()) -> String -> Command
-ioActionHelper _ _ [] state = return state
-ioActionHelper f name (x:xs) state@(ScriptState _ wd _) = do
-  r <- try $ f $ combine wd x :: IO (Either IOException ())
-  case r of
-    Left e -> return state { output = unlines [ name ++ ": " ++ ioeGetErrorString e ] }
-    Right val -> do state' <- ioActionHelper f name xs state
-                    return state' { output = "" }
-
 data GrepFlag = Invert | IgnoreCase | OnlyMatching | LineNumber | Count deriving (Eq)
 
 grepOptions :: [OptDescr GrepFlag]
@@ -176,26 +166,34 @@ grepOptions = [ Option ['v'] ["invert-match"]  (NoArg Invert)       "Invert the 
               ]
 
 grep :: Command
-grep xs state = case getOpt Permute grepOptions xs of
-  (flags, args, []) -> if (length args < 2) then return state { output = header }
-                                            else grepHelper state flags args
+grep xs h state = case getOpt Permute grepOptions xs of
+  (flags, args, []) -> if (length args < 1) then return state { output = header }
+                                            else grepHelper h state flags args
   (_, _, errors)    -> return state { output = concat errors ++ header }
   where header = usageInfo "Usage: grep [OPTION...] pattern files..." grepOptions
 
-grepHelper :: ScriptState -> [GrepFlag] -> [String] -> IO ScriptState
-grepHelper state flags [pattern, file] = do
-  output <- grepSingle state flags pattern file
+grepHelper :: Handle -> ScriptState -> [GrepFlag] -> [String] -> IO ScriptState
+grepHelper h state flags [pattern] = do
+  content <- readHandle h
+  let output = grepString state flags pattern content
   return state { output = output }
-grepHelper state flags (pattern:xs) = do
-  results <- forM xs $ grepSingle state flags pattern
+grepHelper _ state flags [pattern, file] = do
+  output <- grepFile state flags pattern file
+  return state { output = output }
+grepHelper _ state flags (pattern:xs) = do
+  results <- forM xs $ grepFile state flags pattern
   let output = unlines $ concat [[file ++ ":", result] | (file, result) <- zip xs results]
   return state { output = output }
 
-grepSingle :: ScriptState -> [GrepFlag] -> String -> String -> IO String
-grepSingle state flags pattern file = do
-  h <- openFile file ReadMode
-  xs <- zip [1..] <$> lines <$> hGetContents h
-  return $ unlines $ grepMap flags pattern $ filter (grepFilter flags pattern) xs
+grepFile :: ScriptState -> [GrepFlag] -> String -> String -> IO String
+grepFile state flags pattern file = withFile file ReadMode $ \h -> do
+  contents <- hGetContents h
+  return $ grepString state flags pattern contents
+
+grepString :: ScriptState -> [GrepFlag] -> String -> String -> String
+grepString state flags pattern content =
+  unlines $ grepMap flags pattern $ filter (grepFilter flags pattern) xs
+  where xs = zip [1..] $ lines content
 
 grepFilter :: [GrepFlag] -> String -> (Int, String) -> Bool
 grepFilter flags pattern = invert . ignoreCase . snd
@@ -218,11 +216,11 @@ data ChmodFlag = ChmodFlag { references :: String
                            , modes      :: String } deriving Show
 
 chmod :: Command
-chmod xs state@(ScriptState _ wd _)
+chmod xs h state@(ScriptState _ wd _)
   | length xs <= 1         = return state { output = unlines [ "chmod: missing operands" ] }
   | (operator flag) == 'u' = return state { output = unlines [ "chmod: invalid flags" ] }
   | (null $ modes flag)    = return state { output = unlines [ "chmod: invalid flags" ] }
-  | otherwise              = ioHelper (chmodHelper flag) "chmod" (tail xs) state
+  | otherwise              = ioHelper (chmodHelper flag) "chmod" (tail xs) h state
   where flag = parseFlag $ head xs
 
 parseFlag :: String -> ChmodFlag
@@ -258,17 +256,40 @@ chmodHelper flag path = do
         filterModes xs = map fst $ filter (\x -> snd x == True) $ zip xs availableModes
 
 hexdump :: Command
-hexdump [path] state@(ScriptState _ wd _) = do
-  contents <- BS.readFile path
---  let hex = concat $ map (\x -> showHex x "") $ BS.unpack contents
-  let output = final 0 (BS.length contents) $ grouping $ BS.unpack contents
-  return state { output = unlines output }
-  where grouping [] = []
+hexdump [] h state = hexdumpHelper state <$> BSC.pack <$> readHandle h
+hexdump [path] _ state = hexdumpHelper state <$> BS.readFile path
+hexdump _ _ state = return state { output = unlines [ "hexdump: only one file" ] }
+
+hexdumpHelper :: ScriptState -> BS.ByteString -> ScriptState
+hexdumpHelper state@(ScriptState _ wd _) content = state { output = output }
+  where output = unlines $ final 0 $ grouping $ BS.unpack content
+        grouping [] = []
         grouping [x] = [pad 4 $ "0" ++ (showHex x "")]
         grouping (x:y:xs) = pad 4 ((showHex y "") ++ (showHex x "")) : grouping xs
-        final _ len [] = [index len ++ ""]
-        final i len xs = (index i ++ " " ++ intercalate " " ys) : final (i + 16) len zs
+        final _ [] = [index (BS.length content) ++ ""]
+        final i xs = (index i ++ " " ++ intercalate " " ys) : final (i + 16) zs
           where (ys, zs) = splitAt 8 xs
         index x = pad 7 $ showHex x ""
         pad n x = printf ("%0" ++ show n ++ "s") x
-hexdump _ state = return state { output = unlines [ "hexdump: only one file" ] }
+
+readHandle :: Handle -> IO String
+readHandle h = do
+  r <- try $ hGetChar h
+  case r of
+    Left e       -> if (isEOFError e) then return "" else return ""
+    Right '\CAN' -> return ""
+    Right next   -> do buf <- readHandle h
+                       return $ next : buf
+
+ioHelper :: (FilePath -> IO ()) -> String -> Command
+ioHelper _ name [] _ state = return state { output = unlines[name ++ ": missing operand"] }
+ioHelper f name xs h state = ioActionHelper f name xs h state
+
+ioActionHelper :: (FilePath -> IO ()) -> String -> Command
+ioActionHelper _ _ [] _ state = return state
+ioActionHelper f name (x:xs) h state@(ScriptState _ wd _) = do
+  r <- try $ f $ combine wd x :: IO (Either IOException ())
+  case r of
+    Left e -> return state { output = unlines [ name ++ ": " ++ ioeGetErrorString e ] }
+    Right val -> do state' <- ioActionHelper f name xs h state
+                    return state' { output = "" }
