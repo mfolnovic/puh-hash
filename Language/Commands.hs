@@ -46,7 +46,7 @@ commands = M.fromList [ ("echo", echo)
 -- Echo command.
 -- Prints each argument separated by space.
 echo :: Command
-echo x _ state = return $ state { output = intercalate " " x }
+echo x _ state = return $ state { output = unlines [intercalate " " x] }
 
 -- Cat command.
 -- Prints content of each given file. If there isn't any given file, reads
@@ -184,12 +184,11 @@ cpdir xs h state@(ScriptState _ wd _)
 -- Helper method for cpdir which does the IO.
 cpdirHelper :: FilePath -> FilePath -> IO ()
 cpdirHelper dest source = do
-  putStrLn $ dest ++ " " ++ source
   isFile <- doesFileExist source
   if isFile then copyFile source dest
-            else do  _ <- createDirectoryIfMissing False dest
-                     contents <- getList source
-                     mapM_ (\x -> cpdirHelper (combine source x) (combine dest x)) contents
+            else do _ <- createDirectoryIfMissing False dest
+                    contents <- getList source
+                    mapM_ (\x -> cpdirHelper (combine dest x) (combine source x)) contents
 
 -- Mkdir command.
 -- Creates a directory.
