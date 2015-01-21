@@ -1,6 +1,6 @@
 module Language.Exec (Command, ScriptState(..), runHashProgram, prompt) where
 
-import Data.Char (isAlphaNum)
+import Data.Char (isAlphaNum, isNumber)
 import Data.List (elemIndex)
 import qualified Data.Map as M
 import Data.Maybe (fromJust, fromMaybe, isJust)
@@ -59,11 +59,10 @@ runAnyCommand ct state assign@(Assign _ _) = runAssign state assign
 -- Runs given command.
 runCommand :: CommandTable -> ScriptState -> Cmd -> IO ScriptState
 runCommand ct state (Cmd name args inDir outDir append) = do
-  handleCommand ct state name' $ \cmd -> do
-    handleInput state inDir $ \h -> do
-      newState <- cmd args' stdin state
-      handleOutput newState outDir append
-      return newState
+  newState <- handleCommand ct state name' $ \cmd -> do
+    handleInput state inDir $ \h -> cmd args' h state
+  handleOutput newState outDir append
+  return newState
   where name' = value state name
         args' = map (value state) args
         vt = vartable state
@@ -122,12 +121,12 @@ runLoop ct state loop@(While pred commands) = do
 
 -- Evaluates comparison.
 evaluateComp :: ScriptState -> Comp -> Bool
-evaluateComp st (CEQ a b) = (value st a) == (value st b)
-evaluateComp st (CNE a b) = (value st a) /= (value st b)
-evaluateComp st (CGE a b) = (value st a) > (value st b)
-evaluateComp st (CGT a b) = (value st a) >= (value st b)
-evaluateComp st (CLE a b) = (value st a) <= (value st b)
-evaluateComp st (CLT a b) = (value st a) < (value st b)
+evaluateComp st (CEQ a b) = (numericValue st a) == (numericValue st b)
+evaluateComp st (CNE a b) = (numericValue st a) /= (numericValue st b)
+evaluateComp st (CGE a b) = (numericValue st a) > (numericValue st b)
+evaluateComp st (CGT a b) = (numericValue st a) >= (numericValue st b)
+evaluateComp st (CLE a b) = (numericValue st a) <= (numericValue st b)
+evaluateComp st (CLT a b) = (numericValue st a) < (numericValue st b)
 evaluateComp st (CLI a) = not $ null $ value st a
 
 -- Evaluates predicate.
@@ -151,6 +150,11 @@ interpolation state str = case next of
 
 -- Default values
 defaultValues = M.fromList [("PS1", "\x1b[0;31m$wd \x1b[0m# ")]
+
+-- Returns numeric value of a given variable or interpolated string.
+numericValue :: ScriptState -> Expr -> Int
+numericValue state expr = if (all isNumber val) then read val else 0
+  where val = value state expr
 
 -- Returns value of a given variable or interpolates given string.
 value :: ScriptState -> Expr -> String

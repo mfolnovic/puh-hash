@@ -17,8 +17,8 @@ import System.IO
 runScript :: FilePath -> IO ()
 runScript path = do
   dir <- getCurrentDirectory
-  state <- loadHashRc path
-  _ <- runPath dir state
+  state <- loadHashRc dir
+  _ <- runPath path state
   return ()
 
 -- Communicates with the user and performs hash commands line by line

@@ -9,6 +9,7 @@ import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
 import Data.Char
 import Data.List
+import Data.List.Utils (subIndex)
 import qualified Data.Map as M
 import Language.Exec (Command, ScriptState(..))
 
@@ -108,11 +109,9 @@ cd xs _ state@(ScriptState _ wd _) = do
 -- Create command.
 -- Creates given files if they don't already exist.
 create :: Command
-create xs _ state@(ScriptState _ wd _) = do
-  let paths = map (combine wd) xs
-  handles <- sequence $ map (\x -> openFile x AppendMode) paths
-  let _ = map hClose handles
-  return state { output = "" }
+create [] _ state = return state { output = "" }
+create (x:xs) h state@(ScriptState _ wd _) =
+  withFile (combine wd x) AppendMode $ \_ -> create xs h state
 
 -- Mv command.
 -- There are several options:
@@ -245,26 +244,43 @@ grepFile state flags pattern file = withFile file ReadMode $ \h -> do
 -- Grep given string.
 grepString :: ScriptState -> [GrepFlag] -> String -> String -> String
 grepString state flags pattern content =
-  unlines $ grepMap flags pattern $ filter (grepFilter flags pattern) xs
+  unlines $ grepMap xs flags pattern $ filter (grepFilter flags pattern) xs
   where xs = zip [1..] $ lines content
 
 -- Handles Invert and IgnoreCase flags.
 grepFilter :: [GrepFlag] -> String -> (Int, String) -> Bool
 grepFilter flags pattern = invert . ignoreCase . snd
-  where ignoreCase str = isInfixOf (lowerStr pattern) (lowerStr str)
+  where ignoreCase str = isInfixOf (lowerStr flags pattern) (lowerStr flags str)
         invert x = if Invert `elem` flags then not x else x
-        lowerStr str = if IgnoreCase `elem` flags then map toLower str
-                                                  else str
 
 -- Handles Count, OnlyMatching and LineNumber flags
-grepMap :: [GrepFlag] -> String -> [(Int, String)] -> [String]
-grepMap flags pattern = count . onlyMatching . lineNumber
+grepMap :: [(Int, String)] -> [GrepFlag] -> String -> [(Int, String)] -> [String]
+grepMap original flags pattern = count . lineNumber . onlyMatching
   where lineNumber results = if LineNumber `elem` flags then [show i ++ ": " ++ x | (i, x) <- results]
                                                         else map snd results
-        onlyMatching results = if OnlyMatching `elem` flags then replicate (length results) pattern
+        onlyMatching results = if OnlyMatching `elem` flags then extractMatching flags original pattern results
                                                             else results
         count results = if Count `elem` flags then [show $ length results]
                                               else results
+
+extractMatching :: [GrepFlag] ->  [(Int, String)] -> String -> [(Int, String)]
+                     -> [(Int, String)]
+extractMatching flags original pattern result = map extract $ zip original' result
+  where original' = [snd $ original !! (i - 1) | (i, _) <- result]
+        extract (orig, (i, res)) = (i, extractMatchingSingle flags orig pattern)
+
+extractMatchingSingle :: [GrepFlag] -> String -> String -> String
+extractMatchingSingle flags str pattern = case pos of
+                                            Just i -> take (length pattern) $ drop i str
+                                            Nothing -> ""
+  where str' = lowerStr flags str
+        pattern' = lowerStr flags pattern
+        pos = subIndex pattern' str'
+
+-- Lowers string if IgnoreCase flag is active.
+lowerStr :: [GrepFlag] -> String -> String
+lowerStr flags str = if IgnoreCase `elem` flags then map toLower str
+                                                else str
 
 -- Chmod flags.
 data ChmodFlag = ChmodFlag { references :: String
