@@ -1,14 +1,13 @@
-module Language.Exec (Command, ScriptState(..), runHashProgram) where
+module Language.Exec (Command, ScriptState(..), runHashProgram, prompt) where
 
 import Data.Char (isAlphaNum)
 import Data.List (elemIndex)
 import qualified Data.Map as M
 import Data.Maybe (fromJust, fromMaybe, isJust)
-
+import Data.String.Utils (replace)
 import GHC.IO.Handle (hDuplicate)
-
 import Language.Expressions
-
+import Network.URI (unEscapeString)
 import System.Directory
 import System.IO
 
@@ -52,84 +51,120 @@ runTopLevel ct state (TLCmd cmd) = runAnyCommand ct state cmd
 runTopLevel ct state (TLCnd cnd) = runIf ct state cnd
 runTopLevel ct state (TLLoop loop) = runLoop ct state loop
 
--- The rest of the module should consist of similar functions, calling each
--- other so that each expression is parsed by a lower-level function and the
--- result can be used in a higher-level function. The Command table and state
--- are passed around as necessary to evaluate commands, assignments and
--- variable substitution. A better way to pass around variables would be to
--- use the State monad or even the StateT monad transformer to wrap IO into it.
-
+-- Runs given command or assignment.
 runAnyCommand :: CommandTable -> ScriptState -> Cmd -> IO ScriptState
 runAnyCommand ct state cmd@(Cmd _ _ _ _ _) = runCommand ct state cmd
 runAnyCommand ct state assign@(Assign _ _) = runAssign state assign
 
+-- Runs given command.
 runCommand :: CommandTable -> ScriptState -> Cmd -> IO ScriptState
 runCommand ct state (Cmd name args inDir outDir append) = do
-  let command = fromJust $ M.lookup name' ct
-  h <- case inDir of
-         Just inDir -> openFile (value vt inDir) ReadMode
-         Nothing    -> return stdin
-  newState <- command args' h state
-  handleOutput vt newState outDir append
-  if (isJust inDir) then hClose h >> return newState
-                    else return newState
-  where name' = value vt name
-        args' = map (value vt) args
+  handleCommand ct state name' $ \cmd -> do
+    handleInput state inDir $ \h -> do
+      newState <- cmd args' stdin state
+      handleOutput newState outDir append
+      return newState
+  where name' = value state name
+        args' = map (value state) args
         vt = vartable state
 
-handleOutput :: VarTable -> ScriptState -> Maybe Expr -> Bool -> IO ()
-handleOutput _ (ScriptState output _ _) Nothing _ = putStr output
-handleOutput vt (ScriptState output _ _) (Just expr) append = do
-  let fileName = value vt expr
+-- Handles if given command is not available.
+handleCommand :: CommandTable -> ScriptState -> String
+                   -> (Command -> IO ScriptState) -> IO ScriptState
+handleCommand ct state name f =
+  case M.lookup name ct of
+    Just cmd -> f cmd
+    Nothing  -> return state { output = "Unknown command: " ++ name }
+
+-- Handles input (redirecting input from file or stdin)
+handleInput :: ScriptState -> Maybe Expr -> (Handle -> IO ScriptState)
+                 -> IO ScriptState
+handleInput state (Just inDir) f = withFile (value state inDir) ReadMode f
+handleInput _ Nothing f = f stdin
+
+-- Handle output (redirect output to file or stdout)
+handleOutput :: ScriptState -> Maybe Expr -> Bool -> IO ()
+handleOutput (ScriptState output _ _) Nothing _ = putStr output'
+  where output' = if (not (null output) && last output /= '\n') then output ++ "\n"
+                                                                else output
+handleOutput state@(ScriptState output _ _) (Just expr) append = do
+  let fileName = value state expr
   if (append) then appendFile fileName output else writeFile fileName output
 
+-- Runs given list of commands.
 runCommands :: CommandTable -> ScriptState -> [Cmd] -> IO ScriptState
 runCommands ct state [] = return state
 runCommands ct state (x:xs) = do
   state' <- runAnyCommand ct state x
   runCommands ct state' xs
 
+-- Runs assignment.
 runAssign :: ScriptState -> Cmd -> IO ScriptState
-runAssign st@(ScriptState _ _ vt) (Assign (Str var) val) = return $ st { vartable = vt' }
-  where vt' = M.insert var val' vt
-        val' = value vt val
+runAssign st@(ScriptState _ _ vt) (Assign (Str var) val) = return $ st'
+  where st' = st { vartable = vt' }
+        vt' = M.insert var val' vt
+        val' = value st val
 
+-- Runs if.
 runIf :: CommandTable -> ScriptState -> Conditional -> IO ScriptState
 runIf ct state (If pred cthen) =
-  if (evaluatePred vt pred) then runCommands ct state cthen else return state
-  where vt = vartable state
+  if (evaluatePred state pred) then runCommands ct state cthen else return state
 runIf ct state (IfElse pred cthen celse) =
-  if (evaluatePred vt pred) then runCommands ct state cthen
-                           else runCommands ct state celse
-  where vt = vartable state
+  if (evaluatePred state pred) then runCommands ct state cthen
+                               else runCommands ct state celse
 
+-- Runs loop.
 runLoop :: CommandTable -> ScriptState -> Loop -> IO ScriptState
 runLoop ct state loop@(While pred commands) = do
-  if (evaluatePred vt pred) then do state' <- runCommands ct state commands
-                                    runLoop ct state' loop
-                            else return state
-  where vt = vartable state
+  if (evaluatePred state pred) then do state' <- runCommands ct state commands
+                                       runLoop ct state' loop
+                               else return state
 
-evaluateComp :: VarTable -> Comp -> Bool
-evaluateComp vt (CEQ a b) = (value vt a) == (value vt b)
-evaluateComp vt (CNE a b) = (value vt a) /= (value vt b)
-evaluateComp vt (CGE a b) = (value vt a) > (value vt b)
-evaluateComp vt (CGT a b) = (value vt a) >= (value vt b)
-evaluateComp vt (CLE a b) = (value vt a) <= (value vt b)
-evaluateComp vt (CLT a b) = (value vt a) < (value vt b)
-evaluateComp vt (CLI a) = not $ null $ value vt a
+-- Evaluates comparison.
+evaluateComp :: ScriptState -> Comp -> Bool
+evaluateComp st (CEQ a b) = (value st a) == (value st b)
+evaluateComp st (CNE a b) = (value st a) /= (value st b)
+evaluateComp st (CGE a b) = (value st a) > (value st b)
+evaluateComp st (CGT a b) = (value st a) >= (value st b)
+evaluateComp st (CLE a b) = (value st a) <= (value st b)
+evaluateComp st (CLT a b) = (value st a) < (value st b)
+evaluateComp st (CLI a) = not $ null $ value st a
 
-evaluatePred :: VarTable -> Pred -> Bool
-evaluatePred vt (Pred comp) = evaluateComp vt comp
+-- Evaluates predicate.
+evaluatePred :: ScriptState -> Pred -> Bool
+evaluatePred st (Pred comp) = evaluateComp st comp
+evaluatePred st (Not pred) = not $ evaluatePred st pred
+evaluatePred st (And a b) = (evaluatePred st a) && (evaluatePred st b)
+evaluatePred st (Or a b) = (evaluatePred st a) && (evaluatePred st b)
+evaluatePred st (Parens pred) = evaluatePred st pred
 
-interpolation :: VarTable -> String -> String
-interpolation vt str = case next of
-    Just (i, name) -> interpolation vt $ (take i str) ++ (val name) ++ (drop (1 + i + length name) str)
+-- Interpolates variables in string.
+interpolation :: ScriptState -> String -> String
+interpolation state str = case next of
+    Just (i, name) -> interpolation state $ (take i str) ++ (val name)
+                      ++ (drop (1 + i + length name) str)
     Nothing -> str
   where next = fmap withVar $ elemIndex '$' str
-        withVar i = (i, takeWhile (\x ->  isAlphaNum x || x == '_') $ drop (i + 1) str)
-        val x = fromMaybe "" $ M.lookup x vt
+        withVar i = (i, takeWhile inVar $ drop (i + 1) str)
+        inVar x = isAlphaNum x || x == '_'
+        val x = value state (Var x)
 
-value :: VarTable -> Expr -> String
-value vt (Str x) = interpolation vt x
-value vt (Var x) = fromMaybe "" $ M.lookup x vt
+-- Default values
+defaultValues = M.fromList [("PS1", "\x1b[0;31m$wd \x1b[0m# ")]
+
+-- Returns value of a given variable or interpolates given string.
+value :: ScriptState -> Expr -> String
+value (ScriptState _ wd _) (Var "wd") = wd
+value state (Str x) = unescape $ interpolation state x
+value state (Var x) = unescape $ fromMaybe defVal $ M.lookup x (vartable state)
+  where defVal = fromMaybe "" $ M.lookup x defaultValues
+
+-- Unescapes string
+unescape :: String -> String
+unescape str = unEscapeString str'
+  where str' = read $ "\"" ++ str ++ "\"" :: String
+
+-- Prompt
+prompt :: Either FilePath ScriptState -> String
+prompt (Left _) = ""
+prompt (Right state) = value state (Str "$PS1")

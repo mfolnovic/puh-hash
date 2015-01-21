@@ -51,6 +51,7 @@ data Conditional = If { cond :: Pred -- Predicate to satisfy
                           }
                  deriving Show
 
+-- A while loop with a condition and a list of actions.
 data Loop = While { loopCond :: Pred
                   , commands :: [Cmd]
                   }

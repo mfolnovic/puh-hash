@@ -1,6 +1,7 @@
 module Parsing.HashParser (parseScript, scriptParser, ifelseexpr) where
 
-import Control.Applicative (Applicative, many, (<$), (<*>), (<$>), (<|>), (*>), (<*))
+import Control.Applicative (Applicative, many, (<$), (<*>), (<$>), (<|>), (*>),
+                            (<*))
 import Control.Monad (void)
 import Data.Either
 
@@ -8,7 +9,8 @@ import Language.Expressions
 
 import Text.Parsec (ParseError)
 import Text.Parsec.String (Parser)
-import Text.Parsec.Char (alphaNum, anyChar, letter, char, digit, oneOf, noneOf, string)
+import Text.Parsec.Char (alphaNum, anyChar, letter, char, digit, oneOf, noneOf,
+                         string)
 import Text.Parsec.Combinator (choice, manyTill, many1, eof, optionMaybe)
 import Text.ParserCombinators.Parsec (try, parse)
 
@@ -117,7 +119,8 @@ simplePredicate :: Parser Pred
 simplePredicate = try notPredicate <|> try parensPredicate <|> singlePredicate
 
 predicate :: Parser Pred
-predicate = (try $ orAndPredicate Or "-o") <|> (try $ orAndPredicate And "-a") <|> simplePredicate
+predicate = (try $ orAndPredicate Or "-o") <|> (try $ orAndPredicate And "-a")
+            <|> simplePredicate
 
 assign :: Parser Cmd
 assign = do
